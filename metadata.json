@@ -1,0 +1,6 @@
+{
+  "name": "OpenFeed",
+  "description": "Standalone Android client for OpenFeed — read, search, and cache public Telegram channels directly on Android without Termux, powered by DNS-over-HTTPS and Google Translate domain bridging.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
