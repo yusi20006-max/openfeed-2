@@ -5,6 +5,8 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import com.example.data.local.OfflineMediaVault
+import com.example.data.local.OfflineVaultCoilInterceptor
 import com.example.data.local.OpenFeedDatabase
 import com.example.data.local.UserPreferencesRepository
 import com.example.data.model.UserSettings
@@ -16,6 +18,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class AppContainer(application: Application) {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -33,11 +38,15 @@ class AppContainer(application: Application) {
         settingsProvider = { latestSettings.value }
     )
 
+    val offlineMediaVault = OfflineMediaVault(application)
+
     private val database = OpenFeedDatabase.getInstance(application)
 
     val repository = OpenFeedRepository(
         dao = database.openFeedDao(),
-        networkClient = networkClient
+        networkClient = networkClient,
+        offlineMediaVault = offlineMediaVault,
+        settingsProvider = { latestSettings.value }
     )
 }
 
@@ -48,11 +57,24 @@ class OpenFeedApplication : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            val settings = container.preferencesRepository.settingsFlow.first()
+            if (settings.backgroundSyncEnabled) {
+                com.example.work.BackgroundSyncScheduler.applySchedule(
+                    this@OpenFeedApplication,
+                    enabled = true,
+                    intervalMinutes = settings.syncIntervalMinutes
+                )
+            }
+        }
     }
 
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
             .okHttpClient(container.networkClient.httpClient)
+            .components {
+                add(OfflineVaultCoilInterceptor(container.offlineMediaVault))
+            }
             .memoryCache {
                 MemoryCache.Builder(this)
                     .maxSizePercent(0.20)

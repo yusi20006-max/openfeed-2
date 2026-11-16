@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,11 +25,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AlternateEmail
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.RssFeed
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,7 +55,7 @@ import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
-import com.example.data.model.StarterChannels
+import com.example.data.model.FeedSourceType
 import com.example.ui.FeedUiState
 import com.example.ui.components.ChannelAvatar
 
@@ -56,18 +63,22 @@ import com.example.ui.components.ChannelAvatar
 fun ChannelsScreen(
     uiState: FeedUiState,
     onAddChannel: (String) -> Unit,
+    onOpenDiscover: () -> Unit,
     onOpenChannelDetail: (String) -> Unit,
     onToggleFavorite: (String, Boolean) -> Unit,
     onRemoveChannel: (String) -> Unit,
+    onExportJsonBackup: (Uri) -> Unit,
+    onImportBackup: (Uri) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var quickInput by remember { mutableStateOf("") }
-    val subscribedSet = remember(uiState.channels) {
-        uiState.channels.map { it.username.lowercase() }.toSet()
-    }
-    val remainingSuggestions = remember(subscribedSet) {
-        StarterChannels.list.filterNot { it.username.lowercase() in subscribedSet }
-    }
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> if (uri != null) onExportJsonBackup(uri) }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) onImportBackup(uri) }
 
     Column(
         modifier = modifier.fillMaxSize(),
@@ -83,11 +94,47 @@ fun ChannelsScreen(
                     .fillMaxWidth()
                     .padding(16.dp)
             ) {
-                Text(
-                    text = stringResource(R.string.nav_channels),
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.nav_channels),
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = {
+                                importLauncher.launch(
+                                    arrayOf("application/json", "text/xml", "application/xml", "text/plain", "*/*")
+                                )
+                            },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("channels_import_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.UploadFile,
+                                contentDescription = stringResource(R.string.import_backup),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        IconButton(
+                            onClick = { exportLauncher.launch("openfeed-backup.json") },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("channels_export_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Download,
+                                contentDescription = stringResource(R.string.export_backup),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -98,7 +145,7 @@ fun ChannelsScreen(
                         onValueChange = { quickInput = it },
                         placeholder = { Text(stringResource(R.string.add_channel_hint)) },
                         leadingIcon = {
-                            Icon(imageVector = Icons.Rounded.AlternateEmail, contentDescription = null)
+                            Icon(imageVector = Icons.Rounded.RssFeed, contentDescription = null)
                         },
                         singleLine = true,
                         isError = !uiState.addChannelError.isNullOrBlank(),
@@ -168,6 +215,17 @@ fun ChannelsScreen(
                 }
 
                 items(uiState.channels, key = { it.username }) { channel ->
+                    val handleLabel = if (channel.sourceType == FeedSourceType.RSS) {
+                        channel.subscribersText?.let { "RSS • $it" } ?: "RSS Feed"
+                    } else {
+                        buildString {
+                            append("@${channel.username}")
+                            if (!channel.subscribersText.isNullOrBlank()) {
+                                append(" • ${channel.subscribersText}")
+                            }
+                        }
+                    }
+
                     Surface(
                         onClick = { onOpenChannelDetail(channel.username) },
                         shape = MaterialTheme.shapes.medium,
@@ -185,7 +243,9 @@ fun ChannelsScreen(
                                 title = channel.title,
                                 avatarUrl = channel.avatarUrl,
                                 transportMode = uiState.settings.transportMode,
-                                sizeDp = 46
+                                sizeDp = 46,
+                                sourceType = channel.sourceType,
+                                username = channel.username
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
@@ -211,20 +271,36 @@ fun ChannelsScreen(
                                     }
                                 }
                                 Text(
-                                    text = buildString {
-                                        append("@${channel.username}")
-                                        if (!channel.subscribersText.isNullOrBlank()) {
-                                            append(" • ${channel.subscribersText}")
-                                        }
-                                    },
+                                    text = handleLabel,
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
+                                    color = if (channel.sourceType == FeedSourceType.RSS) {
+                                        MaterialTheme.colorScheme.tertiary
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 if (!channel.lastTransportUsed.isNullOrBlank()) {
                                     Text(
                                         text = "${channel.lastTransportUsed}${channel.lastLatencyMs?.let { " (${it}ms)" } ?: ""}",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            val unread = uiState.unreadCounts[channel.username] ?: 0
+                            if (unread > 0) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.padding(end = 4.dp)
+                                ) {
+                                    Text(
+                                        text = if (unread > 99) "99+" else unread.toString(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                                     )
                                 }
                             }
@@ -257,64 +333,42 @@ fun ChannelsScreen(
                 }
             }
 
-            if (remainingSuggestions.isNotEmpty()) {
-                item {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Discover Public Channels",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                items(remainingSuggestions, key = { "suggest_${it.username}" }) { suggested ->
-                    Surface(
-                        onClick = { if (!uiState.isAddingChannel) onAddChannel(suggested.username) },
-                        shape = MaterialTheme.shapes.medium,
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("discover_channel_${suggested.username}")
+            item {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Text(
+                            text = "Looking for more channels or RSS feeds?",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Explore 50 popular Persian Telegram channels and 36 Persian & global RSS feeds with logos in Discover.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        FilledTonalButton(
+                            onClick = onOpenDiscover,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("channels_open_discover_button")
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = suggested.title,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.primaryContainer,
-                                        shape = RoundedCornerShape(6.dp)
-                                    ) {
-                                        Text(
-                                            text = suggested.category,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
-                                Text(
-                                    text = "@${suggested.username} • ${suggested.description}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
                             Icon(
-                                imageVector = Icons.Rounded.Add,
-                                contentDescription = stringResource(R.string.add_channel_button),
-                                tint = MaterialTheme.colorScheme.primary
+                                imageVector = Icons.Rounded.Explore,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
                             )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.browse_discover_cta))
                         }
                     }
                 }

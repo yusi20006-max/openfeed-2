@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -46,25 +47,31 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import coil.compose.SubcomposeAsyncImage
 import com.example.R
 import com.example.data.model.FeedPost
+import com.example.data.model.FeedSourceType
 import com.example.data.model.MediaAttachment
 import com.example.data.model.TransportMode
 import com.example.data.network.UrlRewriter
 import com.example.ui.MediaViewerState
+import okhttp3.OkHttpClient
 
 @Composable
 fun MediaViewerOverlay(
     state: MediaViewerState,
     transportMode: TransportMode,
     isDownloading: Boolean,
+    httpClient: OkHttpClient? = null,
     onDownload: (FeedPost, MediaAttachment) -> Unit,
     onClose: () -> Unit
 ) {
@@ -90,6 +97,7 @@ fun MediaViewerOverlay(
                     state = state,
                     transportMode = transportMode,
                     isDownloading = isDownloading,
+                    httpClient = httpClient,
                     onDownload = onDownload,
                     onClose = onClose
                 )
@@ -249,14 +257,20 @@ private fun VideoPlayerContent(
     state: MediaViewerState.VideoPlayer,
     transportMode: TransportMode,
     isDownloading: Boolean,
+    httpClient: OkHttpClient?,
     onDownload: (FeedPost, MediaAttachment) -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
     val mediaUrl = UrlRewriter.resolveMediaUrl(state.video, transportMode)
 
-    val exoPlayer = remember(mediaUrl) {
-        ExoPlayer.Builder(context).build().apply {
+    val exoPlayer = remember(mediaUrl, httpClient) {
+        val builder = ExoPlayer.Builder(context)
+        if (httpClient != null) {
+            val dataSourceFactory = OkHttpDataSource.Factory(httpClient)
+            builder.setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+        }
+        builder.build().apply {
             setMediaItem(MediaItem.fromUri(mediaUrl))
             prepare()
             playWhenReady = true
@@ -317,10 +331,18 @@ private fun VideoPlayerContent(
                     shape = CircleShape
                 ) {
                     Text(
-                        text = "@${state.post.channelUsername}",
+                        text = if (state.post.sourceType == FeedSourceType.RSS) {
+                            state.post.channelTitle
+                        } else {
+                            "@${state.post.channelUsername}"
+                        },
                         color = Color.White,
                         style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .widthIn(max = 180.dp)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(8.dp))

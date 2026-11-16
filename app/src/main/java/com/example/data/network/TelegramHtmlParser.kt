@@ -51,6 +51,7 @@ object TelegramHtmlParser {
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
         val avatarUrl = rawAvatar?.let { UrlRewriter.toDirectTelegramUrl(it) }
+            ?: com.example.data.model.StarterChannels.telegramAvatarFallback(username)
 
         val subscribersText = doc.select(".tgme_channel_info_counter").firstOrNull { counter ->
             val type = counter.selectFirst(".counter_type")?.text()?.lowercase(Locale.US) ?: ""

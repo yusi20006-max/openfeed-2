@@ -6,10 +6,13 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.model.BridgeLangProfile
 import com.example.data.model.DohProvider
+import com.example.data.model.OfflinePrefetchPolicy
 import com.example.data.model.ThemeMode
 import com.example.data.model.TransportMode
 import com.example.data.model.UserSettings
@@ -31,6 +34,13 @@ class UserPreferencesRepository(private val context: Context) {
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val AUTO_LOAD_MEDIA = booleanPreferencesKey("auto_load_media")
         val FONT_SCALE = floatPreferencesKey("font_scale")
+        val BACKGROUND_SYNC_ENABLED = booleanPreferencesKey("background_sync_enabled")
+        val SYNC_INTERVAL_MINUTES = intPreferencesKey("sync_interval_minutes")
+        val NOTIFY_FAVORITES_ONLY = booleanPreferencesKey("notify_favorites_only")
+        val LAST_BACKGROUND_SYNC_AT = longPreferencesKey("last_background_sync_at")
+        val OFFLINE_PREFETCH_POLICY = stringPreferencesKey("offline_prefetch_policy")
+        val OFFLINE_MAX_CACHE_MB = intPreferencesKey("offline_max_cache_mb")
+        val OFFLINE_CACHE_RSS_ARTICLES = booleanPreferencesKey("offline_cache_rss_articles")
     }
 
     val settingsFlow: Flow<UserSettings> = context.dataStore.data.map { prefs ->
@@ -51,7 +61,16 @@ class UserPreferencesRepository(private val context: Context) {
             } ?: ThemeMode.DARK,
             dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: false,
             autoLoadMedia = prefs[Keys.AUTO_LOAD_MEDIA] ?: true,
-            fontScale = prefs[Keys.FONT_SCALE] ?: 1.0f
+            fontScale = prefs[Keys.FONT_SCALE] ?: 1.0f,
+            backgroundSyncEnabled = prefs[Keys.BACKGROUND_SYNC_ENABLED] ?: false,
+            syncIntervalMinutes = prefs[Keys.SYNC_INTERVAL_MINUTES] ?: 60,
+            notifyFavoritesOnly = prefs[Keys.NOTIFY_FAVORITES_ONLY] ?: true,
+            lastBackgroundSyncAt = prefs[Keys.LAST_BACKGROUND_SYNC_AT] ?: 0L,
+            offlinePrefetchPolicy = prefs[Keys.OFFLINE_PREFETCH_POLICY]?.let { name ->
+                OfflinePrefetchPolicy.entries.firstOrNull { it.name == name }
+            } ?: OfflinePrefetchPolicy.WIFI_ONLY,
+            offlineMaxCacheMb = prefs[Keys.OFFLINE_MAX_CACHE_MB] ?: 150,
+            offlineCacheFullRssArticles = prefs[Keys.OFFLINE_CACHE_RSS_ARTICLES] ?: true
         )
     }
 
@@ -91,5 +110,33 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setFontScale(scale: Float) {
         context.dataStore.edit { it[Keys.FONT_SCALE] = scale.coerceIn(0.85f, 1.35f) }
+    }
+
+    suspend fun setBackgroundSyncEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.BACKGROUND_SYNC_ENABLED] = enabled }
+    }
+
+    suspend fun setSyncIntervalMinutes(minutes: Int) {
+        context.dataStore.edit { it[Keys.SYNC_INTERVAL_MINUTES] = minutes.coerceAtLeast(15) }
+    }
+
+    suspend fun setNotifyFavoritesOnly(favoritesOnly: Boolean) {
+        context.dataStore.edit { it[Keys.NOTIFY_FAVORITES_ONLY] = favoritesOnly }
+    }
+
+    suspend fun setLastBackgroundSyncAt(timestampMs: Long) {
+        context.dataStore.edit { it[Keys.LAST_BACKGROUND_SYNC_AT] = timestampMs }
+    }
+
+    suspend fun setOfflinePrefetchPolicy(policy: OfflinePrefetchPolicy) {
+        context.dataStore.edit { it[Keys.OFFLINE_PREFETCH_POLICY] = policy.name }
+    }
+
+    suspend fun setOfflineMaxCacheMb(maxMb: Int) {
+        context.dataStore.edit { it[Keys.OFFLINE_MAX_CACHE_MB] = maxMb.coerceIn(50, 500) }
+    }
+
+    suspend fun setOfflineCacheFullRssArticles(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.OFFLINE_CACHE_RSS_ARTICLES] = enabled }
     }
 }

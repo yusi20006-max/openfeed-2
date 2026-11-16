@@ -1,5 +1,10 @@
 package com.example.data.model
 
+enum class FeedSourceType {
+    TELEGRAM,
+    RSS
+}
+
 enum class TransportMode(val label: String, val subtitle: String) {
     AUTO("Smart Auto", "Tries Google Translate Bridge or Direct automatically"),
     TRANSLATE_BRIDGE("Translate Bridge", "Routes via *.translate.goog (best for filtered networks)"),
@@ -24,6 +29,23 @@ enum class DohProvider(val label: String, val endpoint: String, val bootstrapIp:
     CLOUDFLARE("Cloudflare DoH (1.1.1.1)", "https://cloudflare-dns.com/dns-query", "1.1.1.1")
 }
 
+enum class OfflinePrefetchPolicy(val label: String) {
+    WIFI_ONLY("Wi-Fi Only"),
+    ALWAYS("Always"),
+    MANUAL("Manual Only")
+}
+
+data class OfflineVaultStats(
+    val photoCount: Int = 0,
+    val totalBytes: Long = 0L,
+    val cachedArticleCount: Int = 0
+)
+
+data class OfflinePrepProgress(
+    val completed: Int,
+    val total: Int
+)
+
 enum class MediaType {
     PHOTO,
     VIDEO,
@@ -40,7 +62,7 @@ data class MediaAttachment(
     val thumbnailUrl: String? = null,
     val thumbnailBridgeUrl: String? = null,
     val title: String? = null,
-    val meta: String? = null // duration or file size
+    val meta: String? = null
 )
 
 data class LinkPreview(
@@ -69,6 +91,7 @@ data class FeedPost(
     val channelTitle: String,
     val channelAvatarUrl: String?,
     val channelVerified: Boolean,
+    val sourceType: FeedSourceType = FeedSourceType.TELEGRAM,
     val postId: Long,
     val postUrl: String,
     val timestampIso: String,
@@ -86,6 +109,7 @@ data class FeedPost(
     val linkPreview: LinkPreview?,
     val poll: PollData?,
     val isBookmarked: Boolean,
+    val isRead: Boolean = false,
     val fetchedAt: Long
 )
 
@@ -97,6 +121,8 @@ data class ChannelInfo(
     val subscribersText: String?,
     val isVerified: Boolean,
     val isFavorite: Boolean,
+    val sourceType: FeedSourceType = FeedSourceType.TELEGRAM,
+    val feedUrl: String? = null,
     val lastFetchedAt: Long,
     val lastTransportUsed: String?,
     val lastLatencyMs: Long?
@@ -106,7 +132,10 @@ data class SuggestedChannel(
     val username: String,
     val title: String,
     val category: String,
-    val description: String
+    val description: String,
+    val sourceType: FeedSourceType = FeedSourceType.TELEGRAM,
+    val feedUrl: String? = null,
+    val logoUrl: String? = null
 )
 
 data class UserSettings(
@@ -118,7 +147,19 @@ data class UserSettings(
     val themeMode: ThemeMode = ThemeMode.DARK,
     val dynamicColor: Boolean = false,
     val autoLoadMedia: Boolean = true,
-    val fontScale: Float = 1.0f
+    val fontScale: Float = 1.0f,
+    val backgroundSyncEnabled: Boolean = false,
+    val syncIntervalMinutes: Int = 60,
+    val notifyFavoritesOnly: Boolean = true,
+    val lastBackgroundSyncAt: Long = 0L,
+    val offlinePrefetchPolicy: OfflinePrefetchPolicy = OfflinePrefetchPolicy.WIFI_ONLY,
+    val offlineMaxCacheMb: Int = 150,
+    val offlineCacheFullRssArticles: Boolean = true
+)
+
+data class DeepLinkTarget(
+    val username: String,
+    val postId: Long? = null
 )
 
 data class ConnectionDiagnostics(
@@ -132,14 +173,3 @@ data class ConnectionDiagnostics(
     val directLatencyMs: Long? = null,
     val summary: String = ""
 )
-
-object StarterChannels {
-    val list = listOf(
-        SuggestedChannel("telegram", "Telegram News", "Official", "Official product updates and announcements from Telegram."),
-        SuggestedChannel("durov", "Pavel Durov", "Founder", "Notes and thoughts from Telegram's founder."),
-        SuggestedChannel("v2rayng_org", "v2rayNG", "Open Source", "Open-source Android proxy client releases & updates."),
-        SuggestedChannel("bbcpersian", "BBC News فارسی", "Persian News", "Breaking news and headlines in Persian."),
-        SuggestedChannel("Digiato", "Digiato | دیجیاتو", "Tech (FA)", "Persian technology, AI, and mobile news."),
-        SuggestedChannel("AndroidDev", "Android Dev", "Engineering", "Android & Jetpack Compose ecosystem news.")
-    )
-}

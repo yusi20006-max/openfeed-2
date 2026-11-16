@@ -75,6 +75,137 @@ class OpenFeedNetworkClient(
         }
     }
 
+    suspend fun fetchRssFeed(
+        sourceKey: String,
+        feedUrl: String,
+        fallbackTitle: String? = null,
+        fallbackLogoUrl: String? = null,
+        existingIsFavorite: Boolean = false
+    ): ParsedChannelPage = withContext(Dispatchers.IO) {
+        val settings = settingsProvider()
+
+        fun fetchAndResolveRss(
+            targetUrl: String,
+            transportLabel: String,
+            viaBridge: Boolean,
+            viaMirror: Boolean,
+            depth: Int = 0
+        ): ParsedChannelPage {
+            val start = System.currentTimeMillis()
+            val requestUrl = when {
+                viaMirror -> UrlRewriter.buildCustomMirrorRssUrl(settings.customMirrorUrl, targetUrl)
+                    ?: throw IOException("Custom mirror URL is empty. Configure it in Settings.")
+                viaBridge -> UrlRewriter.toTranslateProxyUrl(
+                    rawUrl = targetUrl,
+                    profile = settings.bridgeLangProfile,
+                    forceAnyHost = true
+                )
+                else -> targetUrl
+            }
+            val body = executeGetString(httpClient, requestUrl)
+            val latency = System.currentTimeMillis() - start
+
+            if (depth == 0 && RssFeedParser.looksLikeHtmlPage(body)) {
+                val discovered = RssFeedParser.discoverFeedUrlFromHtml(body, targetUrl)
+                    ?: "${targetUrl.trimEnd('/')}/feed"
+                return fetchAndResolveRss(
+                    targetUrl = discovered,
+                    transportLabel = transportLabel,
+                    viaBridge = viaBridge,
+                    viaMirror = viaMirror,
+                    depth = 1
+                )
+            }
+
+            val resolvedSourceKey = if (targetUrl != feedUrl) {
+                com.example.data.model.StarterChannels.buildRssSourceKey(targetUrl)
+            } else {
+                sourceKey
+            }
+
+            val parsed = RssFeedParser.parse(
+                xml = body,
+                sourceKey = resolvedSourceKey,
+                feedUrl = targetUrl,
+                transportUsed = transportLabel,
+                latencyMs = latency,
+                fallbackTitle = fallbackTitle,
+                fallbackLogoUrl = fallbackLogoUrl,
+                existingIsFavorite = existingIsFavorite
+            )
+            if (parsed.posts.isEmpty() && RssFeedParser.looksLikeHtmlPage(body)) {
+                throw IOException("No RSS/Atom feed found at $targetUrl")
+            }
+            return parsed
+        }
+
+        if (settings.transportMode == TransportMode.CUSTOM_MIRROR && settings.customMirrorUrl.isNotBlank()) {
+            val mirrorRes = runCatching {
+                fetchAndResolveRss(feedUrl, "RSS • Mirror", viaBridge = false, viaMirror = true)
+            }
+            if (mirrorRes.isSuccess) return@withContext mirrorRes.getOrThrow()
+        }
+
+        if (settings.transportMode == TransportMode.TRANSLATE_BRIDGE) {
+            val bridgeFirst = runCatching {
+                fetchAndResolveRss(feedUrl, "RSS • Bridge", viaBridge = true, viaMirror = false)
+            }
+            if (bridgeFirst.isSuccess) return@withContext bridgeFirst.getOrThrow()
+        }
+
+        val directLabel = if (settings.useDoH) "RSS • DoH" else "RSS"
+        val directResult = runCatching {
+            fetchAndResolveRss(feedUrl, directLabel, viaBridge = false, viaMirror = false)
+        }
+        directResult.getOrElse { directErr ->
+            runCatching {
+                fetchAndResolveRss(feedUrl, "RSS • Bridge", viaBridge = true, viaMirror = false)
+            }.getOrElse {
+                throw IOException("RSS fetch failed: ${directErr.message}")
+            }
+        }
+    }
+
+    suspend fun fetchArticleContent(articleUrl: String): ExtractedArticle = withContext(Dispatchers.IO) {
+        val cleanUrl = UrlRewriter.toDirectTelegramUrl(articleUrl.trim())
+        val settings = settingsProvider()
+
+        fun fetchVia(viaBridge: Boolean, viaMirror: Boolean): ExtractedArticle {
+            val targetUrl = when {
+                viaMirror -> UrlRewriter.buildCustomMirrorRssUrl(settings.customMirrorUrl, cleanUrl)
+                    ?: throw IOException("Custom mirror URL is empty.")
+                viaBridge -> UrlRewriter.toTranslateProxyUrl(
+                    rawUrl = cleanUrl,
+                    profile = settings.bridgeLangProfile,
+                    forceAnyHost = true
+                )
+                else -> cleanUrl
+            }
+            val html = executeGetString(httpClient, targetUrl)
+            return ArticleReaderParser.parse(html = html, sourceUrl = cleanUrl)
+        }
+
+        if (settings.transportMode == TransportMode.CUSTOM_MIRROR && settings.customMirrorUrl.isNotBlank()) {
+            val mirrorRes = runCatching { fetchVia(viaBridge = false, viaMirror = true) }
+            if (mirrorRes.isSuccess) return@withContext mirrorRes.getOrThrow()
+        }
+
+        if (settings.transportMode == TransportMode.TRANSLATE_BRIDGE) {
+            val bridgeRes = runCatching { fetchVia(viaBridge = true, viaMirror = false) }
+            if (bridgeRes.isSuccess) return@withContext bridgeRes.getOrThrow()
+        }
+
+        val directRes = runCatching { fetchVia(viaBridge = false, viaMirror = false) }
+        if (directRes.isSuccess) return@withContext directRes.getOrThrow()
+
+        if (settings.transportMode != TransportMode.DIRECT) {
+            val bridgeFallback = runCatching { fetchVia(viaBridge = true, viaMirror = false) }
+            if (bridgeFallback.isSuccess) return@withContext bridgeFallback.getOrThrow()
+        }
+
+        throw IOException(directRes.exceptionOrNull()?.message ?: "Failed to load article")
+    }
+
     private fun fetchAutoWithFallback(
         username: String,
         beforeId: Long?,

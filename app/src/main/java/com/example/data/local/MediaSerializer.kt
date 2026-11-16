@@ -5,6 +5,7 @@ import com.example.data.model.MediaAttachment
 import com.example.data.model.MediaType
 import com.example.data.model.PollData
 import com.example.data.model.PollOption
+import com.example.data.network.ArticleBlock
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -131,6 +132,54 @@ object MediaSerializer {
             buildList {
                 for (i in 0 until arr.length()) {
                     add(arr.getString(i))
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun encodeArticleBlocks(blocks: List<ArticleBlock>): String {
+        val arr = JSONArray()
+        blocks.forEach { block ->
+            arr.put(JSONObject().apply {
+                when (block) {
+                    is ArticleBlock.Heading -> {
+                        put("type", "heading")
+                        put("text", block.text)
+                        put("level", block.level)
+                    }
+                    is ArticleBlock.Paragraph -> {
+                        put("type", "paragraph")
+                        put("text", block.text)
+                    }
+                    is ArticleBlock.Quote -> {
+                        put("type", "quote")
+                        put("text", block.text)
+                    }
+                    is ArticleBlock.CodeBlock -> {
+                        put("type", "code")
+                        put("text", block.text)
+                    }
+                }
+            })
+        }
+        return arr.toString()
+    }
+
+    fun decodeArticleBlocks(json: String?): List<ArticleBlock> {
+        if (json.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(json)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    val text = obj.optString("text", "")
+                    if (text.isBlank()) continue
+                    when (obj.optString("type", "paragraph")) {
+                        "heading" -> add(ArticleBlock.Heading(text, obj.optInt("level", 2)))
+                        "quote" -> add(ArticleBlock.Quote(text))
+                        "code" -> add(ArticleBlock.CodeBlock(text))
+                        else -> add(ArticleBlock.Paragraph(text))
+                    }
                 }
             }
         }.getOrDefault(emptyList())

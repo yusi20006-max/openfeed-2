@@ -4,6 +4,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,13 +27,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.MarkEmailUnread
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.RssFeed
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -43,6 +51,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,19 +64,26 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.model.ChannelInfo
 import com.example.data.model.FeedPost
 import com.example.data.model.MediaAttachment
-import com.example.data.model.StarterChannels
 import com.example.data.model.TransportMode
 import com.example.ui.FeedFilterMode
 import com.example.ui.FeedUiState
 import com.example.ui.MediaViewerState
+import com.example.ui.components.ChannelAvatar
 import com.example.ui.components.PostCard
+import com.example.ui.theme.resolveIsDarkTheme
+import okhttp3.OkHttpClient
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FeedScreen(
     uiState: FeedUiState,
@@ -76,16 +92,22 @@ fun FeedScreen(
     onSearchQueryChange: (String) -> Unit,
     onRefreshAll: () -> Unit,
     onOpenAddChannel: () -> Unit,
-    onQuickAddChannel: (String) -> Unit,
+    onOpenDiscover: () -> Unit,
     onOpenChannelDetail: (String) -> Unit,
     onToggleBookmark: (FeedPost) -> Unit,
     onOpenMedia: (MediaViewerState) -> Unit,
     onToggleAudio: (String) -> Unit,
     onDownloadMedia: (FeedPost, MediaAttachment) -> Unit,
     onShowMessage: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    httpClient: OkHttpClient? = null,
+    onMarkPostRead: (String) -> Unit = {},
+    onMarkAllRead: () -> Unit = {},
+    onToggleDarkMode: (Boolean) -> Unit = {},
+    onOpenArticle: ((FeedPost, String, String) -> Unit)? = null
 ) {
     var showSearch by remember { mutableStateOf(false) }
+    val isDark = resolveIsDarkTheme(uiState.settings.themeMode)
 
     Column(
         modifier = modifier.fillMaxSize(),
@@ -107,7 +129,10 @@ fun FeedScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
                         Surface(
                             color = MaterialTheme.colorScheme.primaryContainer,
                             shape = RoundedCornerShape(10.dp),
@@ -123,11 +148,13 @@ fun FeedScreen(
                             }
                         }
                         Spacer(modifier = Modifier.width(10.dp))
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = stringResource(R.string.app_name),
                                 style = MaterialTheme.typography.titleLarge,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
@@ -150,13 +177,41 @@ fun FeedScreen(
                                         if (uiState.settings.useDoH) append(" • DoH")
                                     },
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (uiState.totalUnreadCount > 0) {
+                            IconButton(
+                                onClick = onMarkAllRead,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("feed_mark_all_read_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DoneAll,
+                                    contentDescription = stringResource(R.string.mark_all_read),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = { onToggleDarkMode(isDark) },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("feed_dark_mode_toggle")
+                        ) {
+                            Icon(
+                                imageVector = if (isDark) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+                                contentDescription = stringResource(R.string.dark_mode_toggle),
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                         IconButton(
                             onClick = {
                                 showSearch = !showSearch
@@ -221,6 +276,19 @@ fun FeedScreen(
 
                 if (uiState.channels.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(10.dp))
+                    SubscribedLogosStrip(
+                        channels = uiState.channels,
+                        unreadCounts = uiState.unreadCounts,
+                        selectedChannelKey = uiState.selectedChannelChip,
+                        transportMode = uiState.settings.transportMode,
+                        onSelectChannel = { key ->
+                            onSetFilterMode(FeedFilterMode.ALL)
+                            onSelectChannelChip(key)
+                        },
+                        onOpenChannelDetail = onOpenChannelDetail
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -238,6 +306,30 @@ fun FeedScreen(
                                     selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
                                 ),
                                 modifier = Modifier.testTag("filter_chip_all")
+                            )
+                        }
+                        item {
+                            val unreadLabel = if (uiState.totalUnreadCount > 0) {
+                                "${stringResource(R.string.tab_unread)} (${uiState.totalUnreadCount})"
+                            } else {
+                                stringResource(R.string.tab_unread)
+                            }
+                            FilterChip(
+                                selected = uiState.filterMode == FeedFilterMode.UNREAD,
+                                onClick = { onSetFilterMode(FeedFilterMode.UNREAD) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.MarkEmailUnread,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                },
+                                label = { Text(unreadLabel) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                ),
+                                modifier = Modifier.testTag("filter_chip_unread")
                             )
                         }
                         item {
@@ -259,22 +351,40 @@ fun FeedScreen(
                                 modifier = Modifier.testTag("filter_chip_favorites")
                             )
                         }
-                        items(uiState.channels, key = { it.username }) { ch ->
-                            val selected = uiState.selectedChannelChip.equals(ch.username, ignoreCase = true)
+                        item {
                             FilterChip(
-                                selected = selected,
+                                selected = uiState.filterMode == FeedFilterMode.TELEGRAM,
                                 onClick = {
-                                    onSetFilterMode(FeedFilterMode.ALL)
-                                    onSelectChannelChip(ch.username)
+                                    onSetFilterMode(FeedFilterMode.TELEGRAM)
+                                    onSelectChannelChip(null)
                                 },
-                                label = {
-                                    Text(
-                                        text = "@${ch.username}",
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Forum,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 },
-                                modifier = Modifier.testTag("channel_chip_${ch.username}")
+                                label = { Text("Telegram") },
+                                modifier = Modifier.testTag("filter_chip_telegram")
+                            )
+                        }
+                        item {
+                            FilterChip(
+                                selected = uiState.filterMode == FeedFilterMode.RSS,
+                                onClick = {
+                                    onSetFilterMode(FeedFilterMode.RSS)
+                                    onSelectChannelChip(null)
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.RssFeed,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                },
+                                label = { Text("RSS") },
+                                modifier = Modifier.testTag("filter_chip_rss")
                             )
                         }
                     }
@@ -286,48 +396,154 @@ fun FeedScreen(
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
 
-        if (uiState.posts.isEmpty()) {
-            FeedEmptyState(
-                hasChannels = uiState.channels.isNotEmpty(),
-                isLoading = uiState.isAddingChannel || uiState.isRefreshing,
-                onOpenAddChannel = onOpenAddChannel,
-                onQuickAddChannel = onQuickAddChannel,
-                onRefreshAll = onRefreshAll,
-                modifier = Modifier
-                    .weight(1f)
-                    .widthIn(max = 640.dp)
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .widthIn(max = 640.dp)
-                    .fillMaxWidth(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+        PullToRefreshBox(
+            isRefreshing = uiState.isRefreshing,
+            onRefresh = onRefreshAll,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.TopCenter
             ) {
-                items(
-                    items = uiState.posts,
-                    key = { it.uniqueKey }
-                ) { post ->
-                    PostCard(
-                        post = post,
-                        transportMode = uiState.settings.transportMode,
-                        autoLoadMedia = uiState.settings.autoLoadMedia,
-                        fontScale = uiState.settings.fontScale,
-                        downloadingKey = uiState.downloadingKey,
-                        activeAudioUrl = uiState.activeAudioUrl,
-                        onChannelClick = onOpenChannelDetail,
-                        onMentionClick = { mention ->
-                            onOpenChannelDetail(mention.removePrefix("@"))
-                        },
-                        onToggleBookmark = onToggleBookmark,
-                        onOpenMedia = onOpenMedia,
-                        onToggleAudio = onToggleAudio,
-                        onDownloadMedia = onDownloadMedia,
-                        onCopiedToast = onShowMessage
+                if (uiState.posts.isEmpty()) {
+                    FeedEmptyState(
+                        hasChannels = uiState.channels.isNotEmpty(),
+                        onOpenDiscover = onOpenDiscover,
+                        onOpenAddChannel = onOpenAddChannel,
+                        onRefreshAll = onRefreshAll,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .widthIn(max = 640.dp)
                     )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .widthIn(max = 640.dp)
+                            .fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        items(
+                            items = uiState.posts,
+                            key = { it.uniqueKey }
+                        ) { post ->
+                            PostCard(
+                                post = post,
+                                transportMode = uiState.settings.transportMode,
+                                autoLoadMedia = uiState.settings.autoLoadMedia,
+                                fontScale = uiState.settings.fontScale,
+                                downloadingKey = uiState.downloadingKey,
+                                activeAudioUrl = uiState.activeAudioUrl,
+                                onChannelClick = onOpenChannelDetail,
+                                onMentionClick = { mention ->
+                                    onOpenChannelDetail(mention.removePrefix("@"))
+                                },
+                                onToggleBookmark = onToggleBookmark,
+                                onOpenMedia = onOpenMedia,
+                                onToggleAudio = onToggleAudio,
+                                onDownloadMedia = onDownloadMedia,
+                                onCopiedToast = onShowMessage,
+                                httpClient = httpClient,
+                                onPostInteracted = { onMarkPostRead(it.uniqueKey) },
+                                onOpenArticle = onOpenArticle
+                            )
+                        }
+                    }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubscribedLogosStrip(
+    channels: List<ChannelInfo>,
+    unreadCounts: Map<String, Int>,
+    selectedChannelKey: String?,
+    transportMode: TransportMode,
+    onSelectChannel: (String?) -> Unit,
+    onOpenChannelDetail: (String) -> Unit
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        items(channels, key = { "strip_${it.username}" }) { ch ->
+            val selected = selectedChannelKey.equals(ch.username, ignoreCase = true)
+            val unread = unreadCounts[ch.username] ?: 0
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .width(64.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable {
+                        if (selected) {
+                            onOpenChannelDetail(ch.username)
+                        } else {
+                            onSelectChannel(ch.username)
+                        }
+                    }
+                    .padding(vertical = 4.dp, horizontal = 2.dp)
+                    .testTag("home_channel_logo_${ch.username}")
+            ) {
+                Box(
+                    modifier = Modifier.size(52.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .then(
+                                if (selected) {
+                                    Modifier.border(2.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                                } else {
+                                    Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                                }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        ChannelAvatar(
+                            title = ch.title,
+                            avatarUrl = ch.avatarUrl,
+                            transportMode = transportMode,
+                            sizeDp = 44,
+                            sourceType = ch.sourceType,
+                            username = ch.username
+                        )
+                    }
+                    if (unread > 0) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = CircleShape,
+                            border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.surface),
+                            modifier = Modifier.align(Alignment.TopEnd)
+                        ) {
+                            Text(
+                                text = if (unread > 99) "99+" else unread.toString(),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = ch.title,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        textDirection = TextDirection.Content
+                    ),
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
             }
         }
     }
@@ -336,9 +552,8 @@ fun FeedScreen(
 @Composable
 private fun FeedEmptyState(
     hasChannels: Boolean,
-    isLoading: Boolean,
+    onOpenDiscover: () -> Unit,
     onOpenAddChannel: () -> Unit,
-    onQuickAddChannel: (String) -> Unit,
     onRefreshAll: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -369,7 +584,7 @@ private fun FeedEmptyState(
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = if (hasChannels) {
-                    "Try refreshing your subscribed channels or clearing your search filter."
+                    "Try refreshing your subscribed feeds or clearing your search filter."
                 } else {
                     stringResource(R.string.empty_feed_subtitle)
                 },
@@ -377,105 +592,51 @@ private fun FeedEmptyState(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
+            Spacer(modifier = Modifier.height(18.dp))
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Button(
-                    onClick = onOpenAddChannel,
+                    onClick = onOpenDiscover,
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.testTag("empty_add_channel_button")
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("empty_open_discover_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Add,
+                        imageVector = Icons.Rounded.Explore,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(stringResource(R.string.add_channel_title))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.browse_discover_cta))
                 }
-                if (hasChannels) {
-                    OutlinedButton(
-                        onClick = onRefreshAll,
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(stringResource(R.string.refresh_feed))
-                    }
-                }
-            }
-        }
-
-        if (!hasChannels) {
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Shield,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Tap any channel below to fetch live via OpenFeed Engine",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            items(StarterChannels.list, key = { it.username }) { suggested ->
-                Surface(
-                    onClick = { if (!isLoading) onQuickAddChannel(suggested.username) },
-                    shape = MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("empty_starter_${suggested.username}")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    OutlinedButton(
+                        onClick = onOpenAddChannel,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.testTag("empty_add_channel_button")
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = suggested.title,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Surface(
-                                    color = MaterialTheme.colorScheme.primaryContainer,
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = suggested.category,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-                            Text(
-                                text = "@${suggested.username} — ${suggested.description}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
                         Icon(
                             imageVector = Icons.Rounded.Add,
-                            contentDescription = "Subscribe",
-                            tint = MaterialTheme.colorScheme.primary
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
                         )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.add_channel_title))
+                    }
+                    if (hasChannels) {
+                        OutlinedButton(
+                            onClick = onRefreshAll,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(stringResource(R.string.refresh_feed))
+                        }
                     }
                 }
             }

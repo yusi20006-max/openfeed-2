@@ -4,18 +4,23 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bookmarks
+import androidx.compose.material.icons.rounded.OfflinePin
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -23,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -32,6 +38,7 @@ import com.example.data.model.MediaAttachment
 import com.example.ui.FeedUiState
 import com.example.ui.MediaViewerState
 import com.example.ui.components.PostCard
+import okhttp3.OkHttpClient
 
 @Composable
 fun SavedScreen(
@@ -42,7 +49,11 @@ fun SavedScreen(
     onToggleAudio: (String) -> Unit,
     onDownloadMedia: (FeedPost, MediaAttachment) -> Unit,
     onShowMessage: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    httpClient: OkHttpClient? = null,
+    onMarkPostRead: (String) -> Unit = {},
+    onOpenArticle: ((FeedPost, String, String) -> Unit)? = null,
+    onPrepareOfflineNow: () -> Unit = {}
 ) {
     Column(
         modifier = modifier.fillMaxSize(),
@@ -53,17 +64,49 @@ fun SavedScreen(
             tonalElevation = 2.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = stringResource(R.string.nav_saved),
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = "${uiState.bookmarkedPosts.size} bookmarked for offline reading",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.nav_saved),
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "${uiState.bookmarkedPosts.size} bookmarked • ${uiState.offlineVaultStats.photoCount} photos offline",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                val prep = uiState.offlinePrepProgress
+                FilledTonalButton(
+                    onClick = onPrepareOfflineNow,
+                    enabled = prep == null,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("saved_prepare_offline_button")
+                ) {
+                    if (prep != null) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("${prep.completed}/${prep.total}")
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.OfflinePin,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.saved_sync_offline))
+                    }
+                }
             }
         }
 
@@ -131,7 +174,10 @@ fun SavedScreen(
                         onOpenMedia = onOpenMedia,
                         onToggleAudio = onToggleAudio,
                         onDownloadMedia = onDownloadMedia,
-                        onCopiedToast = onShowMessage
+                        onCopiedToast = onShowMessage,
+                        httpClient = httpClient,
+                        onPostInteracted = { onMarkPostRead(it.uniqueKey) },
+                        onOpenArticle = onOpenArticle
                     )
                 }
             }

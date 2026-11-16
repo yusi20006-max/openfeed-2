@@ -18,13 +18,15 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AlternateEmail
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.RssFeed
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
@@ -42,6 +44,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.StarterChannels
+import com.example.data.model.SuggestedChannel
+import com.example.data.model.TransportMode
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -49,11 +53,18 @@ fun AddChannelBottomSheet(
     isAdding: Boolean,
     errorMessage: String?,
     subscribedUsernames: Set<String>,
+    transportMode: TransportMode,
     onAddChannel: (String) -> Unit,
+    onSubscribeSuggested: (SuggestedChannel) -> Unit,
+    onOpenDiscover: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var input by remember { mutableStateOf("") }
+
+    val quickPicks = remember {
+        StarterChannels.persianTelegramChannels.take(4) + StarterChannels.rssFeeds.take(4)
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -74,7 +85,7 @@ fun AddChannelBottomSheet(
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Paste a t.me/channel link or enter @username. OpenFeed fetches public posts directly without Termux.",
+                text = "Paste @username, t.me/channel, or any https://.../feed RSS/Atom URL.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -90,7 +101,7 @@ fun AddChannelBottomSheet(
                     placeholder = { Text(stringResource(R.string.add_channel_hint)) },
                     leadingIcon = {
                         Icon(
-                            imageVector = Icons.Rounded.AlternateEmail,
+                            imageVector = Icons.Rounded.RssFeed,
                             contentDescription = null
                         )
                     },
@@ -144,9 +155,9 @@ fun AddChannelBottomSheet(
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
             Text(
-                text = "Quick Starter Feeds",
+                text = "Quick Starter Picks (Telegram & RSS)",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -156,17 +167,27 @@ fun AddChannelBottomSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                StarterChannels.list.forEach { suggested ->
+                quickPicks.forEach { suggested ->
                     val alreadyAdded = subscribedUsernames.any {
                         it.equals(suggested.username, ignoreCase = true)
                     }
                     SuggestionChip(
                         onClick = {
                             if (!alreadyAdded && !isAdding) {
-                                onAddChannel(suggested.username)
+                                onSubscribeSuggested(suggested)
                             }
                         },
                         enabled = !alreadyAdded && !isAdding,
+                        icon = {
+                            ChannelAvatar(
+                                title = suggested.title,
+                                avatarUrl = suggested.logoUrl,
+                                transportMode = transportMode,
+                                sizeDp = 22,
+                                sourceType = suggested.sourceType,
+                                username = suggested.username
+                            )
+                        },
                         border = BorderStroke(
                             1.dp,
                             if (alreadyAdded) MaterialTheme.colorScheme.primary
@@ -174,13 +195,33 @@ fun AddChannelBottomSheet(
                         ),
                         label = {
                             Text(
-                                text = if (alreadyAdded) "✓ @${suggested.username}" else "@${suggested.username}",
+                                text = if (alreadyAdded) "✓ ${suggested.title}" else suggested.title,
                                 style = MaterialTheme.typography.labelMedium
                             )
                         },
                         modifier = Modifier.testTag("starter_chip_${suggested.username}")
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            OutlinedButton(
+                onClick = {
+                    onDismiss()
+                    onOpenDiscover()
+                },
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("sheet_open_discover_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Explore,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Browse 50 Persian Channels & 36 RSS Feeds")
             }
         }
     }

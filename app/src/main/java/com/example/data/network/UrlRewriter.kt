@@ -9,9 +9,19 @@ object UrlRewriter {
 
     private val usernameRegex = Regex("^[A-Za-z][A-Za-z0-9_]{3,63}$")
 
+    fun isRssFeedUrl(rawInput: String): Boolean {
+        val trimmed = rawInput.trim()
+        if (!trimmed.startsWith("http://", ignoreCase = true) &&
+            !trimmed.startsWith("https://", ignoreCase = true)
+        ) return false
+        val host = runCatching { Uri.parse(trimmed).host?.lowercase() }.getOrNull() ?: return false
+        return host !in setOf("t.me", "www.t.me", "telegram.me", "www.telegram.me", "t-me.translate.goog")
+    }
+
     fun normalizeUsername(rawInput: String): String? {
         val trimmed = rawInput.trim()
         if (trimmed.isEmpty()) return null
+        if (isRssFeedUrl(trimmed)) return null
 
         val candidate = when {
             trimmed.startsWith("@") -> trimmed.removePrefix("@")
@@ -69,6 +79,18 @@ object UrlRewriter {
         }
     }
 
+    fun buildCustomMirrorRssUrl(mirrorBase: String, feedUrl: String): String? {
+        val clean = mirrorBase.trim().trimEnd('/')
+        if (clean.isEmpty()) return null
+        val withHttps = if (clean.startsWith("http://") || clean.startsWith("https://")) clean else "https://$clean"
+        val encoded = Uri.encode(feedUrl.trim())
+        return when {
+            withHttps.contains("{url}") -> withHttps.replace("{url}", encoded)
+            withHttps.contains("?") -> "$withHttps&url=$encoded"
+            else -> "$withHttps/?url=$encoded"
+        }
+    }
+
     fun toDirectTelegramUrl(rawUrl: String): String {
         if (rawUrl.isBlank()) return rawUrl
         val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return rawUrl
@@ -92,15 +114,26 @@ object UrlRewriter {
         return cleanBuilder.build().toString()
     }
 
+    fun isTelegramOwnedHost(host: String?): Boolean {
+        if (host.isNullOrBlank()) return false
+        val h = host.lowercase()
+        return h == "t.me" || h.endsWith(".t.me") ||
+            h == "telegram.me" || h.endsWith(".telegram.me") ||
+            h == "telegram.org" || h.endsWith(".telegram.org") ||
+            h.endsWith("telesco.pe")
+    }
+
     fun toTranslateProxyUrl(
         rawUrl: String,
-        profile: BridgeLangProfile = BridgeLangProfile.PRESERVE_ORIGINAL
+        profile: BridgeLangProfile = BridgeLangProfile.PRESERVE_ORIGINAL,
+        forceAnyHost: Boolean = false
     ): String {
         if (rawUrl.isBlank()) return rawUrl
         val directUrl = toDirectTelegramUrl(rawUrl)
         val uri = runCatching { Uri.parse(directUrl) }.getOrNull() ?: return rawUrl
         val host = uri.host ?: return rawUrl
         if (host.endsWith(".translate.goog")) return rawUrl
+        if (!forceAnyHost && !isTelegramOwnedHost(host)) return rawUrl
 
         val proxiedHost = host.replace("-", "--").replace(".", "-") + ".translate.goog"
         val builder = uri.buildUpon()
@@ -134,7 +167,6 @@ object UrlRewriter {
     }
 
     private fun restoreOriginalHost(encodedHost: String): String {
-        // Google Translate encodes '.' as '-' and literal '-' as '--'
         val placeholder = "\u0000"
         return encodedHost
             .replace("--", placeholder)

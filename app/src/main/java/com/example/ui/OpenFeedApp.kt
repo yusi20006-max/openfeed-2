@@ -11,11 +11,13 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.RssFeed
 import androidx.compose.material.icons.rounded.Settings
@@ -42,6 +44,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
@@ -53,8 +56,10 @@ import androidx.navigation.navArgument
 import com.example.R
 import com.example.ui.components.AddChannelBottomSheet
 import com.example.ui.components.MediaViewerOverlay
+import com.example.ui.screens.ArticleReaderScreen
 import com.example.ui.screens.ChannelDetailScreen
 import com.example.ui.screens.ChannelsScreen
+import com.example.ui.screens.DiscoverScreen
 import com.example.ui.screens.FeedScreen
 import com.example.ui.screens.SavedScreen
 import com.example.ui.screens.SettingsScreen
@@ -63,12 +68,19 @@ import kotlinx.coroutines.launch
 
 object OpenFeedRoutes {
     const val ROUTE_FEED = "feed"
+    const val ROUTE_DISCOVER = "discover"
     const val ROUTE_CHANNELS = "channels"
     const val ROUTE_SAVED = "saved"
     const val ROUTE_SETTINGS = "settings"
-    const val ROUTE_CHANNEL_DETAIL = "channel_detail/{username}"
+    const val ROUTE_CHANNEL_DETAIL = "channel_detail/{username}?postId={postId}"
 
-    fun channelDetail(username: String): String = "channel_detail/$username"
+    fun channelDetail(username: String, postId: Long? = null): String {
+        return if (postId != null && postId > 0L) {
+            "channel_detail/$username?postId=$postId"
+        } else {
+            "channel_detail/$username"
+        }
+    }
 }
 
 private data class TopLevelDestination(
@@ -86,6 +98,13 @@ private val topDestinations = listOf(
         selectedIcon = Icons.Rounded.RssFeed,
         unselectedIcon = Icons.Outlined.RssFeed,
         testTag = "nav_tab_feed"
+    ),
+    TopLevelDestination(
+        route = OpenFeedRoutes.ROUTE_DISCOVER,
+        labelRes = R.string.nav_discover,
+        selectedIcon = Icons.Rounded.Explore,
+        unselectedIcon = Icons.Outlined.Explore,
+        testTag = "nav_tab_discover"
     ),
     TopLevelDestination(
         route = OpenFeedRoutes.ROUTE_CHANNELS,
@@ -113,6 +132,8 @@ private val topDestinations = listOf(
 @Composable
 fun OpenFeedApp(viewModel: OpenFeedViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val pendingDeepLink by viewModel.pendingDeepLink.collectAsStateWithLifecycle()
+    val readerState by viewModel.readerState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -123,6 +144,14 @@ fun OpenFeedApp(viewModel: OpenFeedViewModel) {
         viewModel.events.collect { message ->
             snackbarHostState.showSnackbar(message)
         }
+    }
+
+    LaunchedEffect(pendingDeepLink) {
+        val target = pendingDeepLink ?: return@LaunchedEffect
+        navController.navigate(OpenFeedRoutes.channelDetail(target.username, target.postId)) {
+            launchSingleTop = true
+        }
+        viewModel.consumeDeepLink()
     }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -189,7 +218,13 @@ fun OpenFeedApp(viewModel: OpenFeedViewModel) {
                                             contentDescription = stringResource(dest.labelRes)
                                         )
                                     },
-                                    label = { Text(stringResource(dest.labelRes)) },
+                                    label = {
+                                        Text(
+                                            text = stringResource(dest.labelRes),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
                                     modifier = Modifier.testTag(dest.testTag)
                                 )
                             }
@@ -243,8 +278,8 @@ fun OpenFeedApp(viewModel: OpenFeedViewModel) {
                                         viewModel.clearAddChannelError()
                                         showAddSheet = true
                                     },
-                                    onQuickAddChannel = { username ->
-                                        viewModel.addChannel(username)
+                                    onOpenDiscover = {
+                                        navigateTopLevel(OpenFeedRoutes.ROUTE_DISCOVER)
                                     },
                                     onOpenChannelDetail = openChannelDetail,
                                     onToggleBookmark = viewModel::toggleBookmark,
@@ -255,7 +290,27 @@ fun OpenFeedApp(viewModel: OpenFeedViewModel) {
                                     },
                                     onShowMessage = { msg ->
                                         coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
+                                    },
+                                    httpClient = viewModel.exoHttpClient,
+                                    onMarkPostRead = viewModel::markPostRead,
+                                    onMarkAllRead = viewModel::markAllRead,
+                                    onToggleDarkMode = viewModel::toggleDarkMode,
+                                    onOpenArticle = { post, url, title ->
+                                        viewModel.openArticleReader(
+                                            url = url,
+                                            title = title,
+                                            fallbackText = post.text,
+                                            postUniqueKey = post.uniqueKey
+                                        )
                                     }
+                                )
+                            }
+
+                            composable(OpenFeedRoutes.ROUTE_DISCOVER) {
+                                DiscoverScreen(
+                                    uiState = uiState,
+                                    onSubscribeSuggested = viewModel::subscribeSuggested,
+                                    onOpenChannelDetail = openChannelDetail
                                 )
                             }
 
@@ -263,9 +318,14 @@ fun OpenFeedApp(viewModel: OpenFeedViewModel) {
                                 ChannelsScreen(
                                     uiState = uiState,
                                     onAddChannel = { raw -> viewModel.addChannel(raw) },
+                                    onOpenDiscover = {
+                                        navigateTopLevel(OpenFeedRoutes.ROUTE_DISCOVER)
+                                    },
                                     onOpenChannelDetail = openChannelDetail,
                                     onToggleFavorite = viewModel::toggleFavorite,
-                                    onRemoveChannel = viewModel::removeChannel
+                                    onRemoveChannel = viewModel::removeChannel,
+                                    onExportJsonBackup = { uri -> viewModel.exportBackupToUri(context, uri, asOpml = false) },
+                                    onImportBackup = { uri -> viewModel.importBackupFromUri(context, uri) }
                                 )
                             }
 
@@ -281,7 +341,18 @@ fun OpenFeedApp(viewModel: OpenFeedViewModel) {
                                     },
                                     onShowMessage = { msg ->
                                         coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
-                                    }
+                                    },
+                                    httpClient = viewModel.exoHttpClient,
+                                    onMarkPostRead = viewModel::markPostRead,
+                                    onOpenArticle = { post, url, title ->
+                                        viewModel.openArticleReader(
+                                            url = url,
+                                            title = title,
+                                            fallbackText = post.text,
+                                            postUniqueKey = post.uniqueKey
+                                        )
+                                    },
+                                    onPrepareOfflineNow = viewModel::prepareOfflineNow
                                 )
                             }
 
@@ -298,17 +369,36 @@ fun OpenFeedApp(viewModel: OpenFeedViewModel) {
                                     onSetAutoLoadMedia = viewModel::setAutoLoadMedia,
                                     onSetFontScale = viewModel::setFontScale,
                                     onRunDiagnostics = viewModel::runDiagnostics,
-                                    onClearCache = viewModel::clearCache
+                                    onClearCache = viewModel::clearCache,
+                                    onExportJsonBackup = { uri -> viewModel.exportBackupToUri(context, uri, asOpml = false) },
+                                    onExportOpmlBackup = { uri -> viewModel.exportBackupToUri(context, uri, asOpml = true) },
+                                    onImportBackup = { uri -> viewModel.importBackupFromUri(context, uri) },
+                                    onSetBackgroundSyncEnabled = { enabled -> viewModel.setBackgroundSyncEnabled(context, enabled) },
+                                    onSetSyncIntervalMinutes = { mins -> viewModel.setSyncIntervalMinutes(context, mins) },
+                                    onSetNotifyFavoritesOnly = viewModel::setNotifyFavoritesOnly,
+                                    onTriggerBackgroundSyncNow = { viewModel.triggerBackgroundSyncNow(context) },
+                                    onSetOfflinePrefetchPolicy = viewModel::setOfflinePrefetchPolicy,
+                                    onSetOfflineMaxCacheMb = viewModel::setOfflineMaxCacheMb,
+                                    onSetOfflineCacheFullRssArticles = viewModel::setOfflineCacheFullRssArticles,
+                                    onPrepareOfflineNow = viewModel::prepareOfflineNow
                                 )
                             }
 
                             composable(
                                 route = OpenFeedRoutes.ROUTE_CHANNEL_DETAIL,
-                                arguments = listOf(navArgument("username") { type = NavType.StringType })
+                                arguments = listOf(
+                                    navArgument("username") { type = NavType.StringType },
+                                    navArgument("postId") {
+                                        type = NavType.LongType
+                                        defaultValue = -1L
+                                    }
+                                )
                             ) { backStackEntry ->
                                 val username = backStackEntry.arguments?.getString("username").orEmpty()
+                                val rawPostId = backStackEntry.arguments?.getLong("postId") ?: -1L
                                 ChannelDetailScreen(
                                     username = username,
+                                    targetPostId = rawPostId.takeIf { it > 0L },
                                     viewModel = viewModel,
                                     onBack = { navController.popBackStack() },
                                     onOpenChannelDetail = openChannelDetail,
@@ -331,10 +421,18 @@ fun OpenFeedApp(viewModel: OpenFeedViewModel) {
                     isAdding = uiState.isAddingChannel,
                     errorMessage = uiState.addChannelError,
                     subscribedUsernames = uiState.channels.map { it.username }.toSet(),
+                    transportMode = uiState.settings.transportMode,
                     onAddChannel = { raw ->
                         viewModel.addChannel(raw) {
                             showAddSheet = false
                         }
+                    },
+                    onSubscribeSuggested = { suggested ->
+                        viewModel.subscribeSuggested(suggested)
+                        showAddSheet = false
+                    },
+                    onOpenDiscover = {
+                        navigateTopLevel(OpenFeedRoutes.ROUTE_DISCOVER)
                     },
                     onDismiss = { showAddSheet = false }
                 )
@@ -345,10 +443,23 @@ fun OpenFeedApp(viewModel: OpenFeedViewModel) {
                     state = viewerState,
                     transportMode = uiState.settings.transportMode,
                     isDownloading = uiState.downloadingKey != null,
+                    httpClient = viewModel.exoHttpClient,
                     onDownload = { post, attachment ->
                         viewModel.downloadAttachment(context, post, attachment)
                     },
                     onClose = viewModel::closeMediaViewer
+                )
+            }
+
+            if (readerState !is ArticleReaderUiState.Closed) {
+                ArticleReaderScreen(
+                    state = readerState,
+                    fontScale = uiState.settings.fontScale,
+                    themeMode = uiState.settings.themeMode,
+                    onClose = viewModel::closeArticleReader,
+                    onRetry = viewModel::retryArticleReader,
+                    onFontScaleChange = viewModel::setFontScale,
+                    onToggleDarkMode = viewModel::toggleDarkMode
                 )
             }
         }

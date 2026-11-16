@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,18 +23,26 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.NetworkCheck
+import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.OfflinePin
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -45,15 +58,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.data.model.BridgeLangProfile
 import com.example.data.model.DohProvider
+import com.example.data.model.OfflinePrefetchPolicy
 import com.example.data.model.ThemeMode
 import com.example.data.model.TransportMode
 import com.example.ui.FeedUiState
+import com.example.ui.theme.resolveIsDarkTheme
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -71,11 +91,47 @@ fun SettingsScreen(
     onSetFontScale: (Float) -> Unit,
     onRunDiagnostics: () -> Unit,
     onClearCache: () -> Unit,
+    onExportJsonBackup: (android.net.Uri) -> Unit,
+    onExportOpmlBackup: (android.net.Uri) -> Unit,
+    onImportBackup: (android.net.Uri) -> Unit,
+    onSetBackgroundSyncEnabled: (Boolean) -> Unit,
+    onSetSyncIntervalMinutes: (Int) -> Unit,
+    onSetNotifyFavoritesOnly: (Boolean) -> Unit,
+    onTriggerBackgroundSyncNow: () -> Unit,
+    onSetOfflinePrefetchPolicy: (OfflinePrefetchPolicy) -> Unit = {},
+    onSetOfflineMaxCacheMb: (Int) -> Unit = {},
+    onSetOfflineCacheFullRssArticles: (Boolean) -> Unit = {},
+    onPrepareOfflineNow: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val settings = uiState.settings
     var mirrorDraft by remember(settings.customMirrorUrl) {
         mutableStateOf(settings.customMirrorUrl)
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {
+        onSetBackgroundSyncEnabled(true)
+    }
+
+    val exportJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) onExportJsonBackup(uri)
+    }
+
+    val exportOpmlLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/xml")
+    ) { uri ->
+        if (uri != null) onExportOpmlBackup(uri)
+    }
+
+    val importBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) onImportBackup(uri)
     }
 
     Column(
@@ -255,7 +311,215 @@ fun SettingsScreen(
                 }
             }
 
-            // Section 2: Diagnostics
+            // Section 2: Background Sync (WorkManager)
+            item {
+                SettingsSectionHeader(
+                    icon = Icons.Rounded.NotificationsActive,
+                    title = stringResource(R.string.settings_sync_section)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Periodic Background Sync",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "Check channels in background & notify on new posts",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = settings.backgroundSyncEnabled,
+                                onCheckedChange = { wantEnable ->
+                                    if (!wantEnable) {
+                                        onSetBackgroundSyncEnabled(false)
+                                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                        ContextCompat.checkSelfPermission(
+                                            context,
+                                            Manifest.permission.POST_NOTIFICATIONS
+                                        ) != PackageManager.PERMISSION_GRANTED
+                                    ) {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    } else {
+                                        onSetBackgroundSyncEnabled(true)
+                                    }
+                                },
+                                modifier = Modifier.testTag("switch_background_sync")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Sync Interval",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        val intervals = listOf(15 to "15m", 30 to "30m", 60 to "1h", 180 to "3h", 360 to "6h")
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            intervals.forEach { (minutes, label) ->
+                                FilterChip(
+                                    selected = settings.syncIntervalMinutes == minutes,
+                                    onClick = { onSetSyncIntervalMinutes(minutes) },
+                                    label = { Text(label) },
+                                    modifier = Modifier.testTag("sync_interval_$minutes")
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Favorites Only", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "Only sync & notify for starred channels",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = settings.notifyFavoritesOnly,
+                                onCheckedChange = onSetNotifyFavoritesOnly,
+                                modifier = Modifier.testTag("switch_notify_favorites")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            val lastSyncLabel = remember(settings.lastBackgroundSyncAt) {
+                                if (settings.lastBackgroundSyncAt <= 0L) {
+                                    "Never run yet"
+                                } else {
+                                    val fmt = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
+                                    "Last sync: ${fmt.format(Date(settings.lastBackgroundSyncAt))}"
+                                }
+                            }
+                            Text(
+                                text = lastSyncLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedButton(
+                                onClick = onTriggerBackgroundSyncNow,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("sync_now_worker_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Sync,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Run Now")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Section 3: Backup & Restore (Export / Import)
+            item {
+                SettingsSectionHeader(
+                    icon = Icons.Rounded.Backup,
+                    title = stringResource(R.string.settings_backup_section)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = "Export subscribed channels & bookmarked posts, or restore from JSON, OPML, or plain channel lists.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val stamp = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+                                    exportJsonLauncher.launch("openfeed-backup-$stamp.json")
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("export_json_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Download,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.export_backup))
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    val stamp = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+                                    exportOpmlLauncher.launch("openfeed-channels-$stamp.opml")
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("export_opml_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Download,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Export OPML")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    importBackupLauncher.launch(
+                                        arrayOf("application/json", "text/xml", "application/xml", "text/plain", "*/*")
+                                    )
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("import_backup_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.UploadFile,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.import_backup))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Section 4: Diagnostics
             item {
                 SettingsSectionHeader(
                     icon = Icons.Rounded.NetworkCheck,
@@ -330,7 +594,7 @@ fun SettingsScreen(
                 }
             }
 
-            // Section 3: Reading & Appearance
+            // Section 5: Reading & Appearance
             item {
                 SettingsSectionHeader(
                     icon = Icons.Rounded.Palette,
@@ -344,6 +608,44 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
+                        val isDark = resolveIsDarkTheme(settings.themeMode)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DarkMode,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = stringResource(R.string.dark_mode_title),
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.dark_mode_subtitle),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = isDark,
+                                onCheckedChange = { enableDark ->
+                                    onSetThemeMode(if (enableDark) ThemeMode.DARK else ThemeMode.LIGHT)
+                                },
+                                modifier = Modifier.testTag("switch_dark_mode")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = "Theme",
                             style = MaterialTheme.typography.titleSmall
@@ -354,7 +656,8 @@ fun SettingsScreen(
                                 FilterChip(
                                     selected = settings.themeMode == mode,
                                     onClick = { onSetThemeMode(mode) },
-                                    label = { Text(mode.label) }
+                                    label = { Text(mode.label) },
+                                    modifier = Modifier.testTag("theme_chip_${mode.name}")
                                 )
                             }
                         }
@@ -375,7 +678,8 @@ fun SettingsScreen(
                             }
                             Switch(
                                 checked = settings.dynamicColor,
-                                onCheckedChange = onSetDynamicColor
+                                onCheckedChange = onSetDynamicColor,
+                                modifier = Modifier.testTag("switch_dynamic_color")
                             )
                         }
 
@@ -414,10 +718,10 @@ fun SettingsScreen(
                 }
             }
 
-            // Section 4: Cache Management
+            // Section 6: Offline Cache & Photo Vault
             item {
                 SettingsSectionHeader(
-                    icon = Icons.Rounded.DeleteSweep,
+                    icon = Icons.Rounded.OfflinePin,
                     title = stringResource(R.string.settings_storage_section)
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -427,29 +731,162 @@ fun SettingsScreen(
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "${uiState.cachedPostCount} cached posts stored locally",
-                                style = MaterialTheme.typography.titleSmall
-                            )
-                            Text(
-                                text = "Bookmarked posts remain safe when clearing cache",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = stringResource(R.string.offline_prefetch_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = stringResource(R.string.offline_prefetch_subtitle),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            OfflinePrefetchPolicy.entries.forEach { policy ->
+                                FilterChip(
+                                    selected = settings.offlinePrefetchPolicy == policy,
+                                    onClick = { onSetOfflinePrefetchPolicy(policy) },
+                                    label = { Text(policy.label) },
+                                    modifier = Modifier.testTag("offline_policy_${policy.name}")
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.offline_rss_articles_title),
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = stringResource(R.string.offline_rss_articles_subtitle),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = settings.offlineCacheFullRssArticles,
+                                onCheckedChange = onSetOfflineCacheFullRssArticles,
+                                modifier = Modifier.testTag("switch_offline_rss_articles")
                             )
                         }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        OutlinedButton(
-                            onClick = onClearCache,
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.testTag("clear_cache_button")
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = stringResource(R.string.offline_vault_limit_title),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text(stringResource(R.string.clear_cache))
+                            listOf(50, 150, 300).forEach { limitMb ->
+                                FilterChip(
+                                    selected = settings.offlineMaxCacheMb == limitMb,
+                                    onClick = { onSetOfflineMaxCacheMb(limitMb) },
+                                    label = { Text("$limitMb MB") },
+                                    modifier = Modifier.testTag("offline_limit_$limitMb")
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val stats = uiState.offlineVaultStats
+                        val mbFormatted = remember(stats.totalBytes) {
+                            val mb = stats.totalBytes / (1024.0 * 1024.0)
+                            String.format(Locale.US, "%.1f MB", mb)
+                        }
+                        Text(
+                            text = stringResource(
+                                R.string.offline_stats_summary,
+                                uiState.cachedPostCount,
+                                stats.cachedArticleCount,
+                                stats.photoCount,
+                                mbFormatted
+                            ),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.offline_bookmarked_safe),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        val prep = uiState.offlinePrepProgress
+                        if (prep != null) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            val fraction = if (prep.total > 0) {
+                                (prep.completed.toFloat() / prep.total.toFloat()).coerceIn(0f, 1f)
+                            } else {
+                                0f
+                            }
+                            LinearProgressIndicator(
+                                progress = { fraction },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = onPrepareOfflineNow,
+                                enabled = prep == null,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("prepare_offline_button")
+                            ) {
+                                if (prep != null) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(stringResource(R.string.offline_preparing, prep.completed, prep.total))
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Rounded.OfflinePin,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(stringResource(R.string.offline_prepare_now))
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = onClearCache,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("clear_cache_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DeleteSweep,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.clear_cache))
+                            }
                         }
                     }
                 }

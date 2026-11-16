@@ -19,16 +19,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Forward
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Forward
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Pause
@@ -69,17 +70,23 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.model.FeedPost
+import com.example.data.model.FeedSourceType
 import com.example.data.model.LinkPreview
 import com.example.data.model.MediaAttachment
 import com.example.data.model.MediaType
 import com.example.data.model.PollData
+import com.example.data.model.StarterChannels
 import com.example.data.model.TransportMode
 import com.example.data.network.UrlRewriter
 import com.example.ui.MediaViewerState
+import okhttp3.OkHttpClient
 
 @Composable
 fun PostCard(
@@ -96,7 +103,11 @@ fun PostCard(
     onToggleAudio: (String) -> Unit,
     onDownloadMedia: (FeedPost, MediaAttachment) -> Unit,
     onCopiedToast: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    httpClient: OkHttpClient? = null,
+    isHighlighted: Boolean = false,
+    onPostInteracted: ((FeedPost) -> Unit)? = null,
+    onOpenArticle: ((FeedPost, String, String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
@@ -108,8 +119,11 @@ fun PostCard(
             .testTag("post_card_${post.uniqueKey}"),
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        tonalElevation = 1.dp
+        border = BorderStroke(
+            width = if (isHighlighted) 2.dp else 1.dp,
+            color = if (isHighlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+        ),
+        tonalElevation = if (isHighlighted) 4.dp else 1.dp
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             // Header row
@@ -117,7 +131,10 @@ fun PostCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
-                    .clickable { onChannelClick(post.channelUsername) }
+                    .clickable {
+                        onPostInteracted?.invoke(post)
+                        onChannelClick(post.channelUsername)
+                    }
                     .padding(vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -125,6 +142,8 @@ fun PostCard(
                     title = post.channelTitle,
                     avatarUrl = post.channelAvatarUrl,
                     transportMode = transportMode,
+                    sourceType = post.sourceType,
+                    username = post.channelUsername,
                     sizeDp = 40
                 )
                 Spacer(modifier = Modifier.width(12.dp))
@@ -153,15 +172,29 @@ fun PostCard(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "@${post.channelUsername}",
+                            text = if (post.sourceType == FeedSourceType.RSS) "RSS" else "@${post.channelUsername}",
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
+                            color = if (post.sourceType == FeedSourceType.RSS) {
+                                MaterialTheme.colorScheme.tertiary
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            }
                         )
                         Text(
                             text = post.displayTime,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        if (!post.isRead) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary)
+                                    .clickable { onPostInteracted?.invoke(post) }
+                                    .testTag("unread_dot_${post.uniqueKey}")
+                            )
+                        }
                     }
                 }
                 if (!post.viewsText.isNullOrBlank()) {
@@ -201,7 +234,7 @@ fun PostCard(
                         .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Forward,
+                        imageVector = Icons.AutoMirrored.Rounded.Forward,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(14.dp)
@@ -268,9 +301,19 @@ fun PostCard(
                     transportMode = transportMode,
                     downloadingKey = downloadingKey,
                     activeAudioUrl = activeAudioUrl,
-                    onOpenMedia = onOpenMedia,
-                    onToggleAudio = onToggleAudio,
-                    onDownloadMedia = onDownloadMedia
+                    httpClient = httpClient,
+                    onOpenMedia = { viewer ->
+                        onPostInteracted?.invoke(post)
+                        onOpenMedia(viewer)
+                    },
+                    onToggleAudio = { url ->
+                        onPostInteracted?.invoke(post)
+                        onToggleAudio(url)
+                    },
+                    onDownloadMedia = { p, att ->
+                        onPostInteracted?.invoke(p)
+                        onDownloadMedia(p, att)
+                    }
                 )
             }
 
@@ -280,8 +323,14 @@ fun PostCard(
                 RichPostText(
                     text = post.text,
                     fontScale = fontScale,
-                    onUrlClick = { url -> runCatching { uriHandler.openUri(url) } },
-                    onMentionClick = onMentionClick
+                    onUrlClick = { url ->
+                        onPostInteracted?.invoke(post)
+                        runCatching { uriHandler.openUri(url) }
+                    },
+                    onMentionClick = { mention ->
+                        onPostInteracted?.invoke(post)
+                        onMentionClick(mention)
+                    }
                 )
             }
 
@@ -292,7 +341,15 @@ fun PostCard(
                     preview = preview,
                     transportMode = transportMode,
                     autoLoadMedia = autoLoadMedia,
-                    onClick = { runCatching { uriHandler.openUri(preview.url) } }
+                    onClick = {
+                        onPostInteracted?.invoke(post)
+                        val host = runCatching { android.net.Uri.parse(preview.url).host }.getOrNull()
+                        if (onOpenArticle != null && !UrlRewriter.isTelegramOwnedHost(host)) {
+                            onOpenArticle(post, preview.url, preview.title ?: post.channelTitle)
+                        } else {
+                            runCatching { uriHandler.openUri(preview.url) }
+                        }
+                    }
                 )
             }
 
@@ -314,7 +371,10 @@ fun PostCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
-                        onClick = { onToggleBookmark(post) },
+                        onClick = {
+                            onPostInteracted?.invoke(post)
+                            onToggleBookmark(post)
+                        },
                         modifier = Modifier
                             .minimumInteractiveComponentSize()
                             .testTag("bookmark_button_${post.uniqueKey}")
@@ -328,6 +388,7 @@ fun PostCard(
 
                     IconButton(
                         onClick = {
+                            onPostInteracted?.invoke(post)
                             val toCopy = buildString {
                                 if (post.text.isNotBlank()) append(post.text).append("\n\n")
                                 append(post.postUrl)
@@ -348,13 +409,17 @@ fun PostCard(
 
                     IconButton(
                         onClick = {
+                            onPostInteracted?.invoke(post)
                             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
                                 putExtra(
                                     Intent.EXTRA_TEXT,
                                     buildString {
                                         append(post.channelTitle)
-                                        append(" (@${post.channelUsername})\n\n")
+                                        if (post.sourceType == FeedSourceType.TELEGRAM) {
+                                            append(" (@${post.channelUsername})")
+                                        }
+                                        append("\n\n")
                                         if (post.text.isNotBlank()) append(post.text).append("\n\n")
                                         append(post.postUrl)
                                     }
@@ -374,28 +439,82 @@ fun PostCard(
                     }
                 }
 
-                Surface(
-                    onClick = { runCatching { uriHandler.openUri(post.postUrl) } },
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.testTag("open_original_${post.uniqueKey}")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "#${post.postId}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
-                            contentDescription = stringResource(R.string.open_in_browser),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(13.dp)
-                        )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (post.sourceType == FeedSourceType.RSS && onOpenArticle != null) {
+                        Surface(
+                            onClick = {
+                                onPostInteracted?.invoke(post)
+                                val headline = post.text.lineSequence().firstOrNull()?.trim()
+                                    ?.takeIf { it.isNotBlank() } ?: post.channelTitle
+                                onOpenArticle(post, post.postUrl, headline)
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                            modifier = Modifier.testTag("read_article_${post.uniqueKey}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Article,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = stringResource(R.string.reader_read_button),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        IconButton(
+                            onClick = {
+                                onPostInteracted?.invoke(post)
+                                runCatching { uriHandler.openUri(post.postUrl) }
+                            },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("open_original_${post.uniqueKey}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                contentDescription = stringResource(R.string.open_in_browser),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    } else {
+                        Surface(
+                            onClick = {
+                                onPostInteracted?.invoke(post)
+                                runCatching { uriHandler.openUri(post.postUrl) }
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.testTag("open_original_${post.uniqueKey}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (post.sourceType == FeedSourceType.RSS) "Article" else "#${post.postId}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                    contentDescription = stringResource(R.string.open_in_browser),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -408,9 +527,18 @@ fun ChannelAvatar(
     title: String,
     avatarUrl: String?,
     transportMode: TransportMode,
-    sizeDp: Int = 40
+    sizeDp: Int = 40,
+    sourceType: FeedSourceType = FeedSourceType.TELEGRAM,
+    username: String? = null
 ) {
-    val resolvedAvatar = avatarUrl?.let { raw ->
+    val effectiveRaw = avatarUrl?.takeIf { it.isNotBlank() }
+        ?: if (sourceType == FeedSourceType.TELEGRAM && !username.isNullOrBlank()) {
+            StarterChannels.telegramAvatarFallback(username)
+        } else {
+            null
+        }
+
+    val resolvedAvatar = effectiveRaw?.let { raw ->
         if (transportMode == TransportMode.DIRECT) raw
         else UrlRewriter.toTranslateProxyUrl(raw)
     }
@@ -527,6 +655,7 @@ private fun PostMediaBlock(
     transportMode: TransportMode,
     downloadingKey: String?,
     activeAudioUrl: String?,
+    httpClient: OkHttpClient?,
     onOpenMedia: (MediaViewerState) -> Unit,
     onToggleAudio: (String) -> Unit,
     onDownloadMedia: (FeedPost, MediaAttachment) -> Unit
@@ -650,6 +779,7 @@ private fun PostMediaBlock(
                 transportMode = transportMode,
                 isPlaying = activeAudioUrl == audio.url,
                 isDownloading = downloadingKey == audio.url,
+                httpClient = httpClient,
                 onTogglePlay = { onToggleAudio(audio.url) },
                 onDownload = { onDownloadMedia(post, audio) }
             )
@@ -788,6 +918,7 @@ private fun PhotoGrid(
     }
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun InlineAudioCard(
     post: FeedPost,
@@ -795,6 +926,7 @@ private fun InlineAudioCard(
     transportMode: TransportMode,
     isPlaying: Boolean,
     isDownloading: Boolean,
+    httpClient: OkHttpClient?,
     onTogglePlay: () -> Unit,
     onDownload: () -> Unit
 ) {
@@ -802,8 +934,13 @@ private fun InlineAudioCard(
     val mediaUrl = UrlRewriter.resolveMediaUrl(audio, transportMode)
 
     if (isPlaying) {
-        val player = remember(mediaUrl) {
-            ExoPlayer.Builder(context).build().apply {
+        val player = remember(mediaUrl, httpClient) {
+            val builder = ExoPlayer.Builder(context)
+            if (httpClient != null) {
+                val dataSourceFactory = OkHttpDataSource.Factory(httpClient)
+                builder.setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            }
+            builder.build().apply {
                 setMediaItem(MediaItem.fromUri(mediaUrl))
                 prepare()
                 playWhenReady = true
